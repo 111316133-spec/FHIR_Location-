@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FHIR 地點與組織設立系統 (標準關聯)</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { padding: 20px; background-color: #f4f6f9; }
+        .card { box-shadow: 0 4px 6px rgba(0,0,0,0.1); border: none; height: 100%; }
+        .card-header { font-weight: bold; }
+        .bg-org { background-color: #e3f2fd; color: #0d47a1; } /* 藍色系: 組織 */
+        .bg-loc { background-color: #e8f5e9; color: #1b5e20; } /* 綠色系: 地點 */
+        pre { background: #333; color: #fff; padding: 10px; border-radius: 5px; font-size: 0.85rem; max-height: 200px; overflow: auto; }
+        .arrow-down { text-align: center; font-size: 2rem; color: #999; margin: 10px 0; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2 class="text-center mb-4">FHIR 標準之組織與地點的系統</h2>
+   
+
+    <div class="row">
+        <div class="col-md-6 mb-4">
+            <div class="card">
+                <div class="card-header bg-org">建立組織 (Organization)</div>
+                <div class="card-body">
+                    <form id="orgForm">
+                        <div class="mb-3">
+                            <label class="form-label">組織名稱</label>
+                            <input type="text" class="form-control" id="orgName" value="" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">組織 UUID (Client ID)</label>
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="orgUuid" readonly>
+                                <button class="btn btn-outline-primary" type="button" onclick="genUUID('orgUuid')">刷新</button>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-primary w-100">建立組織 (PUT)</button>
+                    </form>
+                    <div id="orgResult" class="mt-3 d-none">
+                        <div class="alert alert-success py-2">組織建立成功！ID 已自動複製到右側。</div>
+                        <pre id="orgJson"></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-6 mb-4">
+            <div class="card">
+                <div class="card-header bg-loc">建立地點 (Location)</div>
+                <div class="card-body">
+                    <form id="locForm">
+                        <div class="mb-3">
+                            <label class="form-label">地點名稱</label>
+                            <input type="text" class="form-control" id="locName" value="" required>
+                        </div>
+                        
+                        <div class="mb-3 p-2 border border-success rounded bg-light">
+                            <label class="form-label fw-bold text-success">管理單位 (Managing Organization)</label>
+                            <input type="text" class="form-control" id="linkOrgUuid" placeholder="等待步驟 1 完成..." readonly required>
+                            <div class="form-text">將寫入 <code>managingOrganization.reference</code></div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">經緯度</label>
+                            <div class="input-group">
+                                <input type="number" step="any" class="form-control" id="lat" placeholder="緯度" required>
+                                <input type="number" step="any" class="form-control" id="lng" placeholder="經度" required>
+                                <button type="button" class="btn btn-success" onclick="getGeo()">📍 定位</button>
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">地點 UUID (Client ID)</label>
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="locUuid" readonly>
+                                <button class="btn btn-outline-success" type="button" onclick="genUUID('locUuid')">刷新</button>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-success w-100">建立地點並連結 (PUT)</button>
+                    </form>
+                    <div id="locResult" class="mt-3 d-none">
+                        <div class="alert alert-success py-2">地點建立成功！已連結至組織。</div>
+                        <pre id="locJson"></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const FHIR_BASE = "https://hapi.fhir.org/baseR4";
+
+    // 初始化：產生兩組 UUID
+    window.onload = function() {
+        genUUID('orgUuid');
+        genUUID('locUuid');
+    };
+
+    function genUUID(elementId) {
+        document.getElementById(elementId).value = crypto.randomUUID();
+    }
+
+    function getGeo() {
+        if(!navigator.geolocation) return alert("瀏覽器不支援定位");
+        navigator.geolocation.getCurrentPosition(p => {
+            document.getElementById('lat').value = p.coords.latitude;
+            document.getElementById('lng').value = p.coords.longitude;
+        });
+    }
+
+    // 1. 處理組織上傳
+    document.getElementById('orgForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const id = document.getElementById('orgUuid').value;
+        const name = document.getElementById('orgName').value;
+
+        const orgResource = {
+            "resourceType": "Organization",
+            "id": id,
+            "active": true,
+            "name": name,
+            "type": [{ "coding": [{ "system": "http://terminology.hl7.org/CodeSystem/organization-type", "code": "prov" }] }]
+        };
+
+        await sendToFhir(id, 'Organization', orgResource, 'orgResult', 'orgJson');
+        
+        // 自動填入地點表單
+        document.getElementById('linkOrgUuid').value = `Organization/${id}`;
+    });
+
+    // 2. 處理地點上傳 (包含關聯)
+    document.getElementById('locForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const id = document.getElementById('locUuid').value;
+        const name = document.getElementById('locName').value;
+        const orgRef = document.getElementById('linkOrgUuid').value;
+        const lat = parseFloat(document.getElementById('lat').value);
+        const lng = parseFloat(document.getElementById('lng').value);
+
+        if (!orgRef) {
+            alert("請先完成步驟 1 建立組織！");
+            return;
+        }
+
+        const locResource = {
+            "resourceType": "Location",
+            "id": id,
+            "status": "active",
+            "name": name,
+            "mode": "instance",
+            // 這是您要求的標準關聯欄位
+            "managingOrganization": {
+                "reference": orgRef,
+                "display": document.getElementById('orgName').value
+            },
+            "position": {
+                "longitude": lng,
+                "latitude": lat
+            }
+        };
+
+        await sendToFhir(id, 'Location', locResource, 'locResult', 'locJson');
+    });
+
+    // 通用發送函式
+    async function sendToFhir(id, type, resource, resultDivId, jsonPreId) {
+        const resultDiv = document.getElementById(resultDivId);
+        const jsonPre = document.getElementById(jsonPreId);
+        
+        try {
+            const url = `${FHIR_BASE}/${type}/${id}`;
+            const res = await fetch(url, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/fhir+json' },
+                body: JSON.stringify(resource)
+            });
+
+            const data = await res.json();
+            
+            resultDiv.classList.remove('d-none');
+            jsonPre.textContent = JSON.stringify(data, null, 2); // 顯示伺服器回傳的確認資料
+
+            if(!res.ok) throw new Error(data.issue?.[0]?.diagnostics || res.statusText);
+
+        } catch (err) {
+            alert(`上傳失敗: ${err.message}`);
+        }
+    }
+</script>
+
+</body>
+</html>
