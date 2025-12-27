@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FHIR Location 產生器 (Client Assigned ID)</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { padding: 20px; background-color: #f8f9fa; }
+        .container { max-width: 800px; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        pre { background: #2d2d2d; color: #f8f8f2; padding: 15px; border-radius: 5px; max-height: 300px; overflow-y: auto; }
+        .status-box { margin-top: 20px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2 class="mb-4 text-primary">FHIR Location 產生器</h2>
+    <p class="text-muted">目標伺服器: <code>https://hapi.fhir.org/baseR4/</code></p>
+    <hr>
+
+    <form id="fhirForm">
+        <div class="mb-3">
+            <label for="locName" class="form-label">地點名稱 (Location Name)</label>
+            <input type="text" class="form-control" id="locName" placeholder="例如：台北101大樓" required>
+        </div>
+        
+        <div class="mb-3">
+            <label for="locAddress" class="form-label">地址 (Address)</label>
+            <input type="text" class="form-control" id="locAddress" placeholder="例如：台北市信義區信義路五段7號" required>
+        </div>
+
+        <div class="row mb-3">
+            <div class="col-md-5">
+                <label for="latitude" class="form-label">緯度 (Latitude)</label>
+                <input type="number" step="any" class="form-control" id="latitude" placeholder="25.0339" required>
+            </div>
+            <div class="col-md-5">
+                <label for="longitude" class="form-label">經度 (Longitude)</label>
+                <input type="number" step="any" class="form-control" id="longitude" placeholder="121.5644" required>
+            </div>
+            <div class="col-md-2 d-flex align-items-end">
+                <button type="button" class="btn btn-outline-secondary w-100" onclick="getBrowserLocation()">
+                    📍 抓取位置
+                </button>
+            </div>
+        </div>
+
+        <div class="mb-3">
+            <label for="uuidDisplay" class="form-label">生成的 Resource ID (UUID)</label>
+            <div class="input-group">
+                <input type="text" class="form-control" id="uuidDisplay" readonly>
+                <button class="btn btn-outline-secondary" type="button" onclick="generateNewUUID()">重新產生</button>
+            </div>
+            <div class="form-text">這將作為 HTTP PUT 的 ID (Client Assigned ID)。</div>
+        </div>
+
+        <button type="submit" class="btn btn-primary w-100 btn-lg">產生並上傳 (HTTP PUT)</button>
+    </form>
+
+    <div id="resultArea" class="status-box d-none">
+        <h4 class="mt-4">執行結果</h4>
+        <div id="alertBox" class="alert" role="alert"></div>
+        
+        <h5>傳送的 FHIR JSON:</h5>
+        <pre id="jsonPreview"></pre>
+        
+        <h5>伺服器回應:</h5>
+        <pre id="serverResponse"></pre>
+    </div>
+</div>
+
+<script>
+    const FHIR_BASE_URL = "https://hapi.fhir.org/baseR4";
+
+    // 初始化時產生一個 UUID
+    window.onload = function() {
+        generateNewUUID();
+    };
+
+    // 產生 UUID v4
+    function generateNewUUID() {
+        const uuid = crypto.randomUUID();
+        document.getElementById('uuidDisplay').value = uuid;
+    }
+
+    // 獲取瀏覽器當前位置
+    function getBrowserLocation() {
+        if (!navigator.geolocation) {
+            alert("您的瀏覽器不支援地理定位");
+            return;
+        }
+        navigator.geolocation.getCurrentPosition(
+            (position) => {
+                document.getElementById('latitude').value = position.coords.latitude;
+                document.getElementById('longitude').value = position.coords.longitude;
+            },
+            () => {
+                alert("無法獲取您的位置，請確認權限是否開啟。");
+            }
+        );
+    }
+
+    // 表單提交處理
+    document.getElementById('fhirForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+
+        // 1. 收集資料
+        const id = document.getElementById('uuidDisplay').value;
+        const name = document.getElementById('locName').value;
+        const address = document.getElementById('locAddress').value;
+        const lat = parseFloat(document.getElementById('latitude').value);
+        const long = parseFloat(document.getElementById('longitude').value);
+
+        // 2. 建構 FHIR Location Resource (R4)
+        const fhirResource = {
+            "resourceType": "Location",
+            "id": id,
+            "status": "active",
+            "name": name,
+            "mode": "instance",
+            "address": {
+                "text": address
+            },
+            "position": {
+                "latitude": lat,
+                "longitude": long
+            }
+        };
+
+        // 顯示預覽
+        const resultArea = document.getElementById('resultArea');
+        const alertBox = document.getElementById('alertBox');
+        const jsonPreview = document.getElementById('jsonPreview');
+        const serverResponse = document.getElementById('serverResponse');
+        
+        resultArea.classList.remove('d-none');
+        jsonPreview.textContent = JSON.stringify(fhirResource, null, 2);
+        alertBox.className = 'alert alert-info';
+        alertBox.textContent = '正在上傳中...';
+        serverResponse.textContent = '';
+
+        // 3. 發送 HTTP PUT 請求
+        try {
+            const url = `${FHIR_BASE_URL}/Location/${id}`;
+            
+            const response = await fetch(url, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/fhir+json'
+                },
+                body: JSON.stringify(fhirResource)
+            });
+
+            const data = await response.json();
+            serverResponse.textContent = JSON.stringify(data, null, 2);
+
+            if (response.ok) {
+                alertBox.className = 'alert alert-success';
+                alertBox.innerHTML = `<strong>成功！</strong> Location 已建立/更新。<br>Resource URL: <a href="${url}" target="_blank">${url}</a>`;
+            } else {
+                throw new Error(data.issue ? data.issue[0].diagnostics : response.statusText);
+            }
+
+        } catch (error) {
+            alertBox.className = 'alert alert-danger';
+            alertBox.textContent = '發生錯誤: ' + error.message;
+            serverResponse.textContent = error.stack || error;
+        }
+    });
+</script>
+
+</body>
+</html>
